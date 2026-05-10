@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>3Dローカル鬼ごっこ</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
+    <style>
+        body {
+            margin: 0; width: 100vw; height: 100vh;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: linear-gradient(to bottom, #ff4500, #ffae00); 
+            font-family: "Meiryo", sans-serif; color: white; overflow: hidden;
+        }
+        h1 { position: absolute; top: 5%; font-size: 5.5rem; margin: 0; text-shadow: 4px 4px 15px rgba(0,0,0,0.5); }
+        #my-id-area { position: absolute; top: 20px; right: 20px; font-size: 1.8rem; background: rgba(0,0,0,0.6); padding: 15px 30px; border-radius: 10px; z-index: 10; display: block; }
+        .main-container { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; background: rgba(0, 0, 0, 0.3); padding: 80px; border-radius: 40px; width: 600px; min-height: 400px; margin-top: 50px; }
+        label { display: block; font-size: 2.5rem; margin-bottom: 25px; }
+        input { width: 90%; padding: 25px; font-size: 2.2rem; text-align: center; border-radius: 15px; border: 3px solid white; outline: none; margin-bottom: 30px; background: white; color: black; }
+        button { padding: 25px 80px; font-size: 2.2rem; background-color: #ff6600; color: white; border: none; border-radius: 20px; cursor: pointer; font-weight: bold; transition: 0.3s; }
+        button:hover { background-color: #ff8800; transform: scale(1.1); }
+        #username-section { display: none; width: 100%; }
+        #waiting-msg { display: none; font-size: 2.5rem; color: #ffff00; font-weight: bold; margin-top: 20px; }
+
+        #overlay { display: none; position: fixed; top:0; left:0; width:100%; height:100%; background: black; z-index: 100; justify-content: center; align-items: center; font-size: 6rem; color: white; flex-direction: column; text-align: center; }
+        #game-canvas { display: none; position: fixed; top:0; left:0; width:100%; height:100%; z-index: 50; }
+        #timer-ui { position: fixed; top: 20px; right: 20px; font-size: 3rem; font-weight: bold; color: white; z-index: 70; display: none; background: rgba(0,0,0,0.5); padding: 10px 20px; border-radius: 10px; }
+        #role-ui { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); font-size: 2.5rem; font-weight: bold; z-index: 70; display: none; text-shadow: 2px 2px 5px black; }
+
+        #block-list-btn { position: absolute; top: 100px; right: 20px; font-size: 1.2rem; padding: 10px 20px; z-index: 100; background: #333; display: none; color: white; border: none; border-radius: 5px; }
+        #block-screen { position: fixed; top:0; left:0; width:100%; height:100%; background: white; z-index: 1000; display: none; justify-content: center; align-items: center; text-align: center; }
+        #block-screen h2 { color: red; font-size: 5rem; }
+        #block-modal { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; color: black; padding: 30px; border-radius: 20px; z-index: 200; width: 400px; text-align: center; border: 5px solid #ff4500; }
+        #block-modal h3 { margin-top: 0; }
+        #block-names-list { margin: 20px 0; max-height: 200px; overflow-y: auto; text-align: left; background: #eee; padding: 10px; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div id="block-screen"><h2>あなたは管理者によりブロックされました</h2></div>
+
+    <button id="block-list-btn" onclick="toggleBlockModal()">ブロックリスト</button>
+
+    <div id="block-modal">
+        <h3>ブロックリスト</h3>
+        <div id="block-names-list"></div>
+        <button onclick="unblockAll()" style="font-size: 1.2rem; padding: 10px 20px; cursor: pointer;">ブロック解除</button>
+        <button onclick="toggleBlockModal()" style="font-size: 1.2rem; padding: 10px 20px; margin-top:10px; background:#666; color:white; cursor: pointer;">閉じる</button>
+    </div>
+
+    <h1 id="title-text">オンライン鬼ごっこ</h1>
+    <div id="my-id-area">Your ID: <span id="my-id" style="font-weight: bold; color: #ffff00;">取得中...</span></div>
+
+    <div class="main-container" id="ui-panel">
+        <div id="connect-section">
+            <label>相手の5桁IDを入力</label>
+            <input type="text" id="target-id" maxlength="5" placeholder="00000">
+            <button onclick="connectToPeer()">ローカル通信開始</button>
+        </div>
+        <div id="username-section">
+            <label>ユーザー名を決定</label>
+            <input type="text" id="user-name" placeholder="名前を入力">
+            <button id="ready-btn" onclick="sendReady()">ゲーム開始</button>
+            <div id="waiting-msg">相手の準備を待機中...</div>
+        </div>
+    </div>
+
+    <div id="overlay"></div>
+    <div id="timer-ui">03:00</div>
+    <div id="role-ui"></div>
+    <canvas id="game-canvas"></canvas>
+
+    <script>
+        const NG_WORDS = ["うんち", "ちんこ", "まんこ", "けつ", "sex", "死ね", "しね", "ブス", "臭い", "シコシコ", "オナニー", "二ガ", "きもい", "キモイ"]; 
+
+        function updateAdminUI() {
+            const isAdmin = localStorage.getItem('isAdminPC') === 'true';
+            const btn = document.getElementById('block-list-btn');
+            if (isAdmin && !gameActive) {
+                btn.style.display = 'block';
+            } else {
+                btn.style.display = 'none';
+            }
+        }
+
+        const savedName = localStorage.getItem('lastUserName');
+        if (savedName) document.getElementById('user-name').value = savedName;
+
+        const myShortId = Math.floor(10000 + Math.random() * 90000).toString();
+        document.getElementById('my-id').innerText = myShortId;
+        const peer = new Peer(myShortId);
+        
+        let activeConn = null;
+        let myReady = false, peerReady = false, isHost = false;
+        let scene, camera, renderer, myMesh, enemyMesh, obstacles = [];
+        let moveState = { w: false, a: false, s: false, d: false, arrowleft: false, arrowright: false, " ": false };
+        let myRole = ""; 
+        let gameActive = false;
+        let timeLeft = 180;
+        let timerInterval;
+        let myYaw = 0; 
+        let lastEnemyPos = { x: 18, y: 0, z: 0 }; 
+
+        let velocityY = 0;
+        let isJumping = false;
+        const gravity = 0.012;
+        const jumpPower = 0.25;
+
+        updateAdminUI();
+
+        function toggleBlockModal() {
+            const modal = document.getElementById('block-modal');
+            const listArea = document.getElementById('block-names-list');
+            if (modal.style.display === 'block') {
+                modal.style.display = 'none';
+            } else {
+                modal.style.display = 'block';
+                const blockedName = localStorage.getItem('blockedUserName');
+                listArea.innerText = blockedName ? "名前: " + blockedName : "ブロック中のユーザーはいません";
+            }
+        }
+
+        function unblockAll() {
+            localStorage.removeItem('blockedPeerId'); // IDのブロックを解除
+            localStorage.removeItem('blockedUserName');
+            alert("ブロックを解除しました。相手は再接続可能になります。");
+            location.reload(); 
+        }
+
+        peer.on('error', (err) => { 
+            if (err.type === 'peer-not-found') alert("エラー: このIDは存在しません");
+            else alert("エラー: " + err.type);
+        });
+
+        peer.on('connection', (conn) => { 
+            // 管理者の場合、接続してきた相手がブロックリストにいないかチェック
+            if (localStorage.getItem('isAdminPC') === 'true') {
+                const blockedId = localStorage.getItem('blockedPeerId');
+                if (blockedId === conn.peer) {
+                    conn.on('open', () => {
+                        conn.send({type: 'FORCE_BLOCK'}); // 相手にブロック通知を送る
+                        setTimeout(() => conn.close(), 500);
+                    });
+                    return;
+                }
+            }
+            activeConn = conn; isHost = false; setupConn(); 
+        });
+
+        function connectToPeer() {
+            const targetId = document.getElementById('target-id').value;
+            if (targetId === myShortId) { alert("自分のIDは入力できません！"); return; }
+            activeConn = peer.connect(targetId);
+            isHost = true;
+            setupConn();
+        }
+
+        function setupConn() {
+            activeConn.on('open', () => {
+                alert("通信成功！");
+                document.getElementById('connect-section').style.display = 'none';
+                document.getElementById('username-section').style.display = 'block';
+            });
+            activeConn.on('data', (data) => {
+                if (data.type === 'FORCE_BLOCK') {
+                    document.getElementById('block-screen').style.display = 'flex';
+                }
+                if (data.type === 'READY') { peerReady = true; checkBothReady(); }
+                if (data.type === 'START_SIGNAL') { syncStart(data); }
+                if (data.type === 'MOVE') { 
+                    lastEnemyPos = { x: data.x, y: data.y, z: data.z };
+                    if(enemyMesh) enemyMesh.position.set(data.x, data.y, data.z); 
+                }
+                if (data.type === 'TOUCHED') { endGame("ONI"); }
+            });
+        }
+
+        function sendReady() {
+            const nameInput = document.getElementById('user-name').value;
+            if(!nameInput) return;
+
+            if (nameInput === "set-admin") {
+                localStorage.setItem('isAdminPC', 'true');
+                alert("このPCを管理者に設定しました。");
+                document.getElementById('user-name').value = "";
+                updateAdminUI();
+                return;
+            }
+
+            const isAdmin = localStorage.getItem('isAdminPC') === 'true';
+
+            // 管理者以外がNGワードを入れた場合、ホストに自分のIDをブロックさせる
+            if (!isAdmin) {
+                const isNG = NG_WORDS.some(word => nameInput.includes(word));
+                if (isNG) {
+                    activeConn.send({type: 'REQUEST_BLOCK', name: nameInput});
+                    document.getElementById('block-screen').style.display = 'flex';
+                    return;
+                }
+            }
+
+            localStorage.setItem('lastUserName', nameInput);
+            myReady = true;
+            activeConn.send({type: 'READY'});
+            document.getElementById('ready-btn').style.display = 'none';
+            document.getElementById('waiting-msg').style.display = 'block';
+            checkBothReady();
+        }
+
+        // ホスト（管理者）側の処理を拡張
+        function setupConn() {
+            activeConn.on('open', () => {
+                document.getElementById('connect-section').style.display = 'none';
+                document.getElementById('username-section').style.display = 'block';
+            });
+            activeConn.on('data', (data) => {
+                if (data.type === 'FORCE_BLOCK') {
+                    document.getElementById('block-screen').style.display = 'flex';
+                }
+                // 管理者がNGワード報告を受けた時
+                if (data.type === 'REQUEST_BLOCK') {
+                    localStorage.setItem('blockedPeerId', activeConn.peer);
+                    localStorage.setItem('blockedUserName', data.name);
+                    activeConn.send({type: 'FORCE_BLOCK'});
+                    alert("不適切な名前を検出し、相手をブロックしました。");
+                    setTimeout(() => location.reload(), 1000);
+                }
+                if (data.type === 'READY') { peerReady = true; checkBothReady(); }
+                if (data.type === 'START_SIGNAL') { syncStart(data); }
+                if (data.type === 'MOVE') { 
+                    lastEnemyPos = { x: data.x, y: data.y, z: data.z };
+                    if(enemyMesh) enemyMesh.position.set(data.x, data.y, data.z); 
+                }
+                if (data.type === 'TOUCHED') { endGame("ONI"); }
+            });
+        }
+        
+        /* initGame, animateなどは変更なしのため省略せず保持 */
+
+        function createPlayer(color) {
+            const group = new THREE.Group();
+            const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.2, 0.8), new THREE.MeshPhongMaterial({color}));
+            body.position.y = 1.1;
+            group.add(body);
+            const head = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 1.0), new THREE.MeshPhongMaterial({color: 0xffdbac}));
+            head.position.y = 2.7;
+            group.add(head);
+            return group;
+        }
+
+        function initGame() {
+            const canvas = document.getElementById('game-canvas');
+            canvas.style.display = 'block';
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87ceeb);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({canvas, antialias: true});
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+            const floorSize = 50;
+            const floor = new THREE.Mesh(new THREE.PlaneGeometry(floorSize, floorSize), new THREE.MeshPhongMaterial({color: 0x32cd32}));
+            floor.rotation.x = -Math.PI/2;
+            scene.add(floor);
+
+            for(let i=0; i<8; i++) {
+                const box = new THREE.Mesh(new THREE.BoxGeometry(2, 4, 2), new THREE.MeshPhongMaterial({color: 0x8b4513}));
+                box.position.set(Math.random()*40-20, 2, Math.random()*40-20);
+                scene.add(box);
+                obstacles.push(box);
+            }
+
+            const light = new THREE.DirectionalLight(0xffffff, 1);
+            light.position.set(5, 10, 7);
+            scene.add(light, new THREE.AmbientLight(0x606060));
+
+            const p1 = createPlayer(0x3333ff); 
+            const p2 = createPlayer(0xff3333); 
+            
+            p1.position.set(-18, 0, 0); 
+            p2.position.set(18, 0, 0);
+            scene.add(p1, p2);
+
+            if (isHost) { 
+                myMesh = p1; enemyMesh = p2; 
+                lastEnemyPos = { x: 18, y: 0, z: 0 };
+            } else { 
+                myMesh = p2; enemyMesh = p1; 
+                lastEnemyPos = { x: -18, y: 0, z: 0 };
+            }
+
+            enemyMesh.position.set(lastEnemyPos.x, lastEnemyPos.y, lastEnemyPos.z);
+            myMesh.visible = false;
+
+            const roleUI = document.getElementById('role-ui');
+            roleUI.style.display = 'block';
+            roleUI.innerText = "あなたは " + (myRole === "ONI" ? "【鬼】" : "【逃げ】") + " です";
+            roleUI.style.color = (myRole === "ONI" ? "red" : "blue");
+            document.getElementById('timer-ui').style.display = 'block';
+
+            startTimer();
+            
+            window.onkeydown = e => { moveState[e.key.toLowerCase()] = true; };
+            window.onkeyup = e => { moveState[e.key.toLowerCase()] = false; };
+            animate();
+        }
+
+        function checkBothReady() {
+            if (myReady && peerReady && isHost) {
+                const hostRole = Math.random() > 0.5 ? "ONI" : "NIGE";
+                const guestRole = hostRole === "ONI" ? "NIGE" : "ONI";
+                activeConn.send({ type: 'START_SIGNAL', role: guestRole });
+                syncStart({ role: hostRole });
+            }
+        }
+
+        function syncStart(data) {
+            myRole = data.role;
+            gameActive = true; 
+            document.getElementById('ui-panel').style.display = 'none';
+            document.getElementById('title-text').style.display = 'none';
+            document.getElementById('block-list-btn').style.display = 'none'; 
+
+            const overlay = document.getElementById('overlay');
+            overlay.style.display = 'flex';
+            overlay.style.background = 'black';
+            overlay.innerText = "バトル開始まで";
+
+            setTimeout(() => {
+                let count = 3;
+                overlay.innerText = count;
+                const timer = setInterval(() => {
+                    count--;
+                    if (count > 0) overlay.innerText = count;
+                    else if (count === 0) overlay.innerText = "START!";
+                    else {
+                        clearInterval(timer);
+                        overlay.style.display = 'none';
+                        initGame();
+                    }
+                }, 1000);
+            }, 2000);
+        }
+
+        function startTimer() {
+            timeLeft = 180;
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                const m = Math.floor(timeLeft / 60).toString().padStart(2, '0');
+                const s = (timeLeft % 60).toString().padStart(2, '0');
+                document.getElementById('timer-ui').innerText = `${m}:${s}`;
+                if (timeLeft <= 0) endGame("NIGE");
+            }, 1000);
+        }
+
+        function endGame(winner) {
+            if(!gameActive) return;
+            gameActive = false;
+            clearInterval(timerInterval);
+            const overlay = document.getElementById('overlay');
+            overlay.style.display = 'flex';
+            overlay.style.background = 'rgba(0,0,0,0.8)';
+            overlay.innerText = "バトル終了！";
+            setTimeout(() => {
+                overlay.innerText = (winner === "ONI" ? "鬼の勝利！" : "逃げの勝利！");
+                setTimeout(() => { location.reload(); }, 1500);
+            }, 1000);
+        }
+
+        function checkCollision(nextX, nextZ) {
+            const floorLimit = 24.5;
+            for (let obs of obstacles) {
+                const dx = nextX - obs.position.x;
+                const dz = nextZ - obs.position.z;
+                if (Math.abs(dx) < 2.0 && Math.abs(dz) < 2.0) return true; 
+            }
+            if (Math.abs(nextX) > floorLimit || Math.abs(nextZ) > floorLimit) return true;
+            return false;
+        }
+
+        function animate() {
+            if(!gameActive) return;
+            requestAnimationFrame(animate);
+            
+            const rotationSpeed = 0.05;
+            if (moveState.arrowleft) myYaw -= rotationSpeed; 
+            if (moveState.arrowright) myYaw += rotationSpeed;
+
+            if (moveState[" "] && !isJumping) {
+                velocityY = jumpPower;
+                isJumping = true;
+            }
+
+            if (isJumping) {
+                myMesh.position.y += velocityY;
+                velocityY -= gravity;
+                if (myMesh.position.y <= 0) {
+                    myMesh.position.y = 0;
+                    isJumping = false;
+                    velocityY = 0;
+                }
+            }
+
+            let vx = 0, vz = 0;
+            const speed = 0.22;
+            if (moveState.w) {
+                vx += Math.sin(myYaw) * speed;
+                vz -= Math.cos(myYaw) * speed;
+            }
+            if (moveState.s) {
+                vx -= Math.sin(myYaw) * speed;
+                vz += Math.cos(myYaw) * speed;
+            }
+            if (moveState.a) {
+                vx -= Math.cos(myYaw) * speed;
+                vz -= Math.sin(myYaw) * speed;
+            }
+            if (moveState.d) {
+                vx += Math.cos(myYaw) * speed;
+                vz += Math.sin(myYaw) * speed;
+            }
+
+            if (!checkCollision(myMesh.position.x + vx, myMesh.position.z)) myMesh.position.x += vx;
+            if (!checkCollision(myMesh.position.x, myMesh.position.z + vz)) myMesh.position.z += vz;
+
+            if (myRole === "ONI") {
+                if (myMesh.position.distanceTo(enemyMesh.position) < 2.0) {
+                    activeConn.send({type: 'TOUCHED'});
+                    endGame("ONI");
+                }
+            }
+
+            if (activeConn && activeConn.open) {
+                activeConn.send({type: 'MOVE', x: myMesh.position.x, y: myMesh.position.y, z: myMesh.position.z});
+            }
+
+            const headHeight = 2.8;
+            camera.position.set(myMesh.position.x, headHeight + myMesh.position.y, myMesh.position.z);
+            const lookX = myMesh.position.x + Math.sin(myYaw);
+            const lookZ = myMesh.position.z - Math.cos(myYaw);
+            camera.lookAt(lookX, headHeight + myMesh.position.y, lookZ);
+
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
